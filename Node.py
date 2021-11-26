@@ -16,7 +16,7 @@ RaftNode = namedtuple('RaftNode', ['id', 'url'])
 
 
 class Node:
-    def __init__(self, id, num_nodes):
+    def __init__(self, id, num_nodes, hostname):
         self.id = id
         self.state = "follower"
         self.currentTerm = 0
@@ -30,13 +30,20 @@ class Node:
         self.electionTimeout = random.randint(150, 300)
         self.heartbeatTimeout = random.randint(150, 300)
 
+        self.ip = hostname
+
         self.nodes = []
         for i in range(num_nodes):
             if i != id:
-                self.nodes.append(RaftNode(i, "http://localhost:%d" % (8000 + i)))
+                self.nodes.append(RaftNode(i, f"http://{hostname}:{i + 8000:d}"))
 
         # start main loop in a separate thread
         thread = threading.Thread(target=self.main_loop)
+        thread.daemon = True
+        thread.start()
+
+        # start another thread to handle listening for incoming messages
+        thread = threading.Thread(target=self.message_from_client_generator)
         thread.daemon = True
         thread.start()
 
@@ -84,12 +91,13 @@ class Node:
             if node.id != self.id:
                 with ServerProxy(node.url) as proxy:
                     try:
-                        response = proxy.request_vote_rpc(self.currentTerm, self.id, len(self.log), self.log[-1]['term'])
+                        # last log term
+                        last_log_term = self.log[-1]['term'] if self.log else 0
+                        response = proxy.request_vote_rpc(self.currentTerm, self.id, len(self.log), last_log_term)
                         if response:
                             votes += 1
                     except Exception as e:
                         logger.error("[%s] Exception: %s", self.id, e)
-
 
         # if votes > majority, become leader
         if votes > len(self.nodes) / 2:
@@ -117,16 +125,18 @@ class Node:
 
     def send_append_entries_rpc(self, node):
         with ServerProxy(node.url) as proxy:
-            response = proxy.append_entries_rpc(self.id,
-                                                self.currentTerm,
-                                                self.nextIndex[node.id],
-                                                self.log[self.nextIndex[node.id] - 1].term,
-                                                self.log[self.nextIndex[node.id] - 1].data)
+            try:
+                prev_log_index = len(self.log) - 1
+                term = self.log[-1]['term'] if self.log else 0
+                entries = self.log[self.nextIndex[node.id]:] if self.nextIndex[node.id] < len(self.log) else []
+                response = proxy.append_entries_rpc(self.id, prev_log_index, term, entries, self.commitIndex)
 
-            # if response is successful, update nextIndex and matchIndex
-            if response[1]:
-                self.nextIndex[node.id] += 1
-                self.matchIndex[node.id] += 1
+                # if response is successful, update nextIndex and matchIndex
+                if response[1]:
+                    self.nextIndex[node.id] += 1
+                    self.matchIndex[node.id] += 1
+            except Exception as e:
+                logger.error("[%s] Exception: %s", self.id, e)
 
             # if fails because of log inconsistency, decrement nextIndex and retry
             else:
@@ -148,12 +158,12 @@ class Node:
             return self.currentTerm, False
 
         # reply false if log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm
-        if len(self.log) > prev_log_index and self.log[prev_log_index].term != prev_log_term:
+        if -1 < prev_log_index < len(self.log) and self.log[prev_log_index].term != prev_log_term:
             return self.currentTerm, False
 
         # if an existing entry conflicts with a new one (same index but different terms),
         # delete the existing entry and all that follow it
-        if len(self.log) > prev_log_index and self.log[prev_log_index].term == prev_log_term:
+        if -1 < prev_log_index < len(self.log) and self.log[prev_log_index].term == prev_log_term:
             self.log = self.log[:prev_log_index]
 
         # append any new entries not already in the log
@@ -192,3 +202,11 @@ class Node:
         else:
             self.log.append({'term': self.currentTerm, 'data': message})
             self.commitIndex += 1
+
+    def message_from_client_generator(self):
+        while True:
+            # receive a message with random probability
+            if random.random() < 0.1:
+                message = 'test'
+                self.receive_message_from_client(message)
+            time.sleep(1)
