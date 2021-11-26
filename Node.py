@@ -5,16 +5,19 @@ Implementation of raft node.
 import logging
 import random
 import time
+import threading
+from collections import namedtuple
 from xmlrpc.client import ServerProxy
 from xmlrpc.server import SimpleXMLRPCServer
 
 logger = logging.getLogger(__name__)
 
+RaftNode = namedtuple('RaftNode', ['id', 'url'])
+
 
 class Node:
-    def __init__(self, id, nodes):
+    def __init__(self, id, num_nodes):
         self.id = id
-        self.nodes = nodes
         self.state = "follower"
         self.currentTerm = 0
         self.votedFor = None
@@ -26,10 +29,26 @@ class Node:
         self.message_received = False
         self.electionTimeout = random.randint(150, 300)
         self.heartbeatTimeout = random.randint(150, 300)
-        self.url = "http://localhost:8000"
+
+        self.nodes = []
+        for i in range(num_nodes):
+            if i != id:
+                self.nodes.append(RaftNode(i, "http://localhost:%d" % (8000 + i)))
+
+        # start main loop in a separate thread
+        thread = threading.Thread(target=self.main_loop)
+        thread.daemon = True
+        thread.start()
+
         # todo: is this the best way to do this?
-        self.server = SimpleXMLRPCServer(("localhost", 8000))
-        self.server.register_instance(self)
+        # start RPC server
+        self.server = SimpleXMLRPCServer(("localhost", 8000 + id))
+
+        # register two rpc functions
+        self.server.register_function(self.request_vote_rpc, "request_vote_rpc")
+        self.server.register_function(self.append_entries_rpc, "append_entries_rpc")
+
+        # Run the server's main loop
         self.server.serve_forever()
 
     def main_loop(self):
@@ -63,9 +82,14 @@ class Node:
         # send RequestVote RPCs to all other servers
         for node in self.nodes:
             if node.id != self.id:
-                response = node.request_vote_rpc(self.id, self.currentTerm, len(self.log) - 1, self.log[-1].term)
-                if response[1]:
-                    votes += 1
+                with ServerProxy(node.url) as proxy:
+                    try:
+                        response = proxy.request_vote_rpc(self.currentTerm, self.id, len(self.log), self.log[-1]['term'])
+                        if response:
+                            votes += 1
+                    except Exception as e:
+                        logger.error("[%s] Exception: %s", self.id, e)
+
 
         # if votes > majority, become leader
         if votes > len(self.nodes) / 2:
