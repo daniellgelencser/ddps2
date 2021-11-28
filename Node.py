@@ -17,7 +17,7 @@ class Node:
     def __init__(self, id, num_nodes, hostname):
         self.logger = logging.getLogger(f'Node({id})')
         logging.basicConfig(filename=f'raft({id}).log', level=logging.INFO)
-        
+
         self.id = id
         self.state = "follower"
         self.currentTerm = 0
@@ -88,6 +88,7 @@ class Node:
         votes = 1
 
         # send RequestVote RPCs to all other servers
+        # todo: does this need to be a separate thread?
         for node in self.nodes:
             if node.id != self.id:
                 with ServerProxy(node.url) as proxy:
