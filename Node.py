@@ -6,6 +6,7 @@ import logging
 import random
 import time
 import threading
+import traceback
 from collections import namedtuple
 from xmlrpc.client import ServerProxy
 from xmlrpc.server import SimpleXMLRPCServer
@@ -19,6 +20,7 @@ class Node:
         logging.basicConfig(filename=f'raft({id}).log', level=logging.INFO)
 
         self.id = id
+        self.leader_id = None
         self.state = "follower"
         self.currentTerm = 0
         self.votedFor = None
@@ -43,18 +45,14 @@ class Node:
         thread.daemon = True
         thread.start()
 
-        # start another thread to handle listening for incoming messages
-        thread = threading.Thread(target=self.message_from_client_generator)
-        thread.daemon = True
-        thread.start()
-
         # todo: is this the best way to do this?
         # start RPC server
-        self.server = SimpleXMLRPCServer(("localhost", 8000 + id))
+        self.server = SimpleXMLRPCServer(("localhost", 8000 + id), allow_none=True)
 
         # register two rpc functions
         self.server.register_function(self.request_vote_rpc, "request_vote_rpc")
         self.server.register_function(self.append_entries_rpc, "append_entries_rpc")
+        self.server.register_function(self.store_message, "store_message")
 
         # Run the server's main loop
         self.server.serve_forever()
@@ -107,7 +105,7 @@ class Node:
                             votes += 1
 
                     except Exception as e:
-                        self.logger.error("[%s] Exception: %s", self.id, e)
+                        self.logger.error("[%s] Exception in election: %s", self.id, e)
 
         # if votes > majority, become leader
         if votes > len(self.nodes) / 2:
@@ -146,6 +144,7 @@ class Node:
                 prev_log_term = self.log[-1]['term'] if self.log else 0
                 term = self.currentTerm
                 entries = self.log[self.nextIndex[node.id]:] if self.nextIndex[node.id] < len(self.log) else []
+
                 response = proxy.append_entries_rpc(term,
                                                     self.id,
                                                     prev_log_index,
@@ -166,41 +165,62 @@ class Node:
                 # if fails because of log inconsistency, decrement nextIndex and retry
                 else:
                     self.nextIndex[node.id] -= 1
-                    self.send_append_entries_rpc(node)
+                    return self.send_append_entries_rpc(node)
+
+                # if there exists an N such that N > commitIndex, a majority of matchIndex[i] ≥ N,
+                # and log[N].term == currentTerm set commitIndex = N
+                for N in range(self.commitIndex + 1, len(self.log)):
+                    majority = 0
+                    for follower_node in self.nodes:
+                        if self.matchIndex[follower_node.id] >= N:
+                            majority += 1
+
+                    if majority > len(self.nodes) / 2:
+                        self.commitIndex = N
+                        self.logger.info("[%s] Updated commitIndex to %d", self.id, self.commitIndex)
 
             except Exception as e:
-                self.logger.error("[%s] communication with %s Exception: %s", self.id, node.id, e)
+                self.logger.error("[%s] communication with %s Exception: %s %s", self.id, node.id, e, traceback.format_exc())
 
     def append_entries_rpc(self, term, leader_id, prev_log_index, prev_log_term, entries, leader_commit) -> (int, bool):
         self.message_received = True
 
-        # todo: is this correct see rules for servers
-        # if AppendEntries RPC request received form new leader, convert to follower
-        if self.state == "candidate" and leader_id != self.id:
-            self.state = "follower"
+        try:
+            # todo: is this correct see rules for servers
+            # if AppendEntries RPC request received form new leader, convert to follower
+            if self.state == "candidate" and leader_id != self.id:
+                self.state = "follower"
 
-        # reply false if term < currentTerm
-        if term < self.currentTerm:
-            return self.currentTerm, False
+            self.leader_id = leader_id
 
-        # reply false if log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm
-        if -1 < prev_log_index < len(self.log) and self.log[prev_log_index].term != prev_log_term:
-            return self.currentTerm, False
+            # reply false if term < currentTerm
+            if term < self.currentTerm:
+                return self.currentTerm, False
 
-        # if an existing entry conflicts with a new one (same index but different terms),
-        # delete the existing entry and all that follow it
-        for entry in entries:
-            if self.log and self.log[entry['index']]['term'] != entry['term']:
-                self.log = self.log[:entry['index']]
-                break
 
-        # append any new entries not already in the log
-        if entries:
-            self.log += entries[len(self.log) - prev_log_index - 1:]
 
-        # update commitIndex
-        if leader_commit > self.commitIndex:
-            self.commitIndex = min(leader_commit, self.log[-1]['index'])
+            # reply false if log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm
+            if -1 < prev_log_index < len(self.log) and self.log[prev_log_index]['term'] != prev_log_term:
+                return self.currentTerm, False
+
+            # if an existing entry conflicts with a new one (same index but different terms),
+            # delete the existing entry and all that follow it
+            for entry in entries:
+                if self.log and entry['index'] < len(self.log) and self.log[entry['index']]['term'] != entry['term']:
+                    self.log = self.log[:entry['index']]
+                    break
+
+            # append any new entries not already in the log
+            if entries:
+                self.log += entries[len(self.log) - prev_log_index - 1:]
+
+            # update commitIndex
+            if leader_commit > self.commitIndex:
+                self.commitIndex = min(leader_commit, self.log[-1]['index'])
+                self.logger.info("[%s] Updated commitIndex to %d", self.id, self.commitIndex)
+
+        except Exception as e:
+            self.logger.error("[%s] Exception in append entries rpc: %s %s", self.id, e, traceback.format_exc())
 
         return self.currentTerm, True
 
@@ -229,20 +249,16 @@ class Node:
         self.state = "follower"
         return self.currentTerm, True
 
-    def receive_message_from_client(self, message):
+    def store_message(self, message):
         # if not leader, send to leader
         if self.state != "leader":
-            pass
+            return self.leader_id, False
 
         # if leader, append to log
         else:
-            self.commitIndex += 1
-            self.log.append({'index': self.commitIndex, 'term': self.currentTerm, 'data': message})
-
-    def message_from_client_generator(self):
-        while True:
-            # receive a message with random probability
-            if random.random() < 0.5:
-                message = 'test'
-                self.receive_message_from_client(message)
-            time.sleep(1)
+            # add ingestion time to the message
+            message['ingestion_time'] = time.time()
+            self.log.append({'index': len(self.log), 'term': self.currentTerm, 'data': message})
+            # log message and commitIndex
+            self.logger.info("[%s] Stored message %s at index %d", self.id, message, self.commitIndex)
+            return self.id, True

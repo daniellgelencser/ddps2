@@ -15,15 +15,6 @@ if __name__ == "__main__":
         p.start()
         processes.append(p)
 
-    time.sleep(2)
-
-    # send a message to all nodes
-    # for i in range(n):
-    #     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    #     s.connect(("localhost", 9000 + i))
-    #     s.sendall(b"Hello")
-    #     s.close()
-
     # wait for all nodes to finish
     for i in range(n):
         processes[i].join()
