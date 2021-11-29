@@ -16,7 +16,7 @@ class Client:
         vars = ['x', 'y', 'x']
         value = random.randint(0, 100)
         return {
-            "timestamp": time.time(),
+            "generation_time": time.time(),
             "var": random.choice(vars),
             "value": value
         }

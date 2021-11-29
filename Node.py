@@ -7,11 +7,8 @@ import random
 import time
 import threading
 import traceback
-from collections import namedtuple
 from xmlrpc.client import ServerProxy
 from xmlrpc.server import SimpleXMLRPCServer
-
-RaftNode = namedtuple('RaftNode', ['id', 'url'])
 
 
 class Node:
@@ -35,10 +32,7 @@ class Node:
 
         self.ip = hostname
 
-        self.nodes = []
-        for i in range(num_nodes):
-            if i != id:
-                self.nodes.append(RaftNode(i, f"http://{hostname}:{i + 8000:d}"))
+        self.nodes = [{'id': i, 'url': f'http://{hostname}:{8000 + i}'} for i in range(num_nodes) if i != id]
 
         # start main loop in a separate thread
         thread = threading.Thread(target=self.main_loop)
@@ -83,40 +77,51 @@ class Node:
         self.votedFor = self.id
         self.state = "candidate"
         self.electionTimeout = random.randint(1500, 5000)
-        votes = 1
+        votes = [True]
 
         # send RequestVote RPCs to all other servers
-        # todo: does this need to be a separate thread?
+        jobs = []
         for node in self.nodes:
-            if node.id != self.id:
-                with ServerProxy(node.url) as proxy:
-                    try:
-                        last_log_term = self.log[-1]['term'] if self.log else 0
-                        last_log_index = self.log[-1]['index'] if self.log else 0
-                        response = proxy.request_vote_rpc(self.currentTerm, self.id, last_log_index, last_log_term)
+            # start a new thread to send request vote RPC
+            thread = threading.Thread(target=self.send_request_vote_rpc, args=(node, votes))
+            thread.start()
+            jobs.append(thread)
 
-                        # if response contains term T > currentTerm, convert to follower
-                        if response[0] > self.currentTerm:
-                            self.update_current_term_and_become_follower(response[0])
-                            return
-
-                        # if response contains voteGranted, increment votes
-                        if response[1]:
-                            votes += 1
-
-                    except Exception as e:
-                        self.logger.error("[%s] Exception in election: %s", self.id, e)
+        # wait for all threads to finish
+        for job in jobs:
+            job.join()
 
         # if votes > majority, become leader
-        if votes > len(self.nodes) / 2:
+        if sum(votes) > (len(self.nodes) + 1) / 2:
             self.state = "leader"
-            self.nextIndex = {node.id: len(self.log) for node in self.nodes}
-            self.matchIndex = {node.id: 0 for node in self.nodes}
+            self.nextIndex = {node['id']: len(self.log) for node in self.nodes}
+            self.matchIndex = {node['id']: 0 for node in self.nodes}
             self.heartbeatTimeout = random.randint(150, 300)
             self.logger.info("[%s] Became leader", self.id)
         else:
             self.state = "follower"
             self.logger.info("[%s] Did not become leader", self.id)
+
+    def send_request_vote_rpc(self, node, votes):
+        with ServerProxy(node['url']) as proxy:
+            try:
+                last_log_term = self.log[-1]['term'] if self.log else 0
+                last_log_index = self.log[-1]['index'] if self.log else 0
+                response = proxy.request_vote_rpc(self.currentTerm, self.id, last_log_index, last_log_term)
+
+                # if response contains term T > currentTerm, convert to follower
+                if response[0] > self.currentTerm:
+                    self.update_current_term_and_become_follower(response[0])
+                    return votes.append(False)
+
+                # if response contains voteGranted, increment votes
+                if response[1]:
+                    return votes.append(True)
+
+            except Exception as e:
+                self.logger.error("[%s] Error in request_vote_rpc: %s %s", self.id, e, traceback.format_exc())
+
+        return votes.append(False)
 
     def leader_loop(self):
         self.logger.info("[%s] Leader loop", self.id)
@@ -133,17 +138,23 @@ class Node:
 
     def send_heartbeats(self):
         # send AppendEntries RPCs to all other servers
+        jobs = []
         for node in self.nodes:
-            if node.id != self.id:
-                self.send_append_entries_rpc(node)
+            # start a new thread to send append entries RPC
+            thread = threading.Thread(target=self.send_append_entries_rpc, args=(node,))
+            thread.start()
+
+        # wait for all threads to finish
+        for job in jobs:
+            job.join()
 
     def send_append_entries_rpc(self, node):
-        with ServerProxy(node.url) as proxy:
+        with ServerProxy(node['url']) as proxy:
             try:
                 prev_log_index = self.log[-1]['index'] if self.log else 0
                 prev_log_term = self.log[-1]['term'] if self.log else 0
                 term = self.currentTerm
-                entries = self.log[self.nextIndex[node.id]:] if self.nextIndex[node.id] < len(self.log) else []
+                entries = self.log[self.nextIndex[node['id']]:] if self.nextIndex[node['id']] < len(self.log) else []
 
                 response = proxy.append_entries_rpc(term,
                                                     self.id,
@@ -159,8 +170,8 @@ class Node:
 
                 # if response is successful, update nextIndex and matchIndex
                 if response[1]:
-                    self.nextIndex[node.id] = self.log[-1]['index'] + 1 if self.log else 0
-                    self.matchIndex[node.id] = self.log[-1]['index'] if self.log else 0
+                    self.nextIndex[node['id']] = self.log[-1]['index'] + 1 if self.log else 0
+                    self.matchIndex[node['id']] = self.log[-1]['index'] if self.log else 0
 
                 # if fails because of log inconsistency, decrement nextIndex and retry
                 else:
@@ -170,17 +181,18 @@ class Node:
                 # if there exists an N such that N > commitIndex, a majority of matchIndex[i] ≥ N,
                 # and log[N].term == currentTerm set commitIndex = N
                 for N in range(self.commitIndex + 1, len(self.log)):
-                    majority = 0
+                    majority = 1
                     for follower_node in self.nodes:
-                        if self.matchIndex[follower_node.id] >= N:
+                        if self.matchIndex[follower_node['id']] >= N:
                             majority += 1
 
-                    if majority > len(self.nodes) / 2:
+                    if majority > len(self.nodes) + 1 / 2:
                         self.commitIndex = N
                         self.logger.info("[%s] Updated commitIndex to %d", self.id, self.commitIndex)
 
             except Exception as e:
-                self.logger.error("[%s] communication with %s Exception: %s %s", self.id, node.id, e, traceback.format_exc())
+                self.logger.error("[%s] communication with %s Exception: %s %s", self.id, node.id, e,
+                                  traceback.format_exc())
 
     def append_entries_rpc(self, term, leader_id, prev_log_index, prev_log_term, entries, leader_commit) -> (int, bool):
         self.message_received = True
@@ -196,8 +208,6 @@ class Node:
             # reply false if term < currentTerm
             if term < self.currentTerm:
                 return self.currentTerm, False
-
-
 
             # reply false if log doesn't contain an entry at prevLogIndex whose term matches prevLogTerm
             if -1 < prev_log_index < len(self.log) and self.log[prev_log_index]['term'] != prev_log_term:
