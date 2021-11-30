@@ -16,6 +16,7 @@ echo "reserved the following nodes: ${workers[*]}"
 # for the 5 nodes in the cluster
 for n in "${workers[@]:1}"
 do
+  echo 'ssh "$n" /var/scratch/ddps2105/Python-3.9.7/python $CODE_PATH/Node.py --name "$n" --port 8000 --cluster "${workers[@]:1}"'
   echo "" | ssh "$n" /var/scratch/ddps2105/Python-3.9.7/python $CODE_PATH/Node.py --name "$n" --port 8000 --cluster "${workers[@]:1}" &
 done
 
@@ -23,4 +24,5 @@ done
 sleep 10
 
 # start the client
-echo "" ssh "${workers[0]}" /var/scratch/ddps2105/Python-3.9.7/python $CODE_PATH/Client.py --port 8000 --cluster "${workers[@]:1}"
+echo 'ssh "${workers[0]}" /var/scratch/ddps2105/Python-3.9.7/python $CODE_PATH/Client.py --port 8000 --cluster "${workers[@]:1}"'
+echo "" | ssh "${workers[0]}" /var/scratch/ddps2105/Python-3.9.7/python $CODE_PATH/Client.py --port 8000 --cluster "${workers[@]:1}"
