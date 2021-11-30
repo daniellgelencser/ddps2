@@ -312,7 +312,7 @@ class Node:
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--name', default=0, type=int, help='id of the server in the cluster, used for logging')
+    parser.add_argument('--name', default=0, type=str, help='id of the server in the cluster, used for logging')
     parser.add_argument('--local', default=True, action='store_true', help='Run locally')
     parser.add_argument('--port', default=8000, type=int, help='Listening port')
     parser.add_argument('--cluster', nargs='+', type=int, default=[], help='List of peers in the cluster')
@@ -337,7 +337,7 @@ if __name__ == '__main__':
     ]
 
     # own port and hostname
-    hostname = 'localhost' if args.local else f'{str(args.name)}.cm.cluster'
+    hostname = 'localhost' if args.local else f'{args.name}.cm.cluster'
     port = args.port + args.cluster.index(args.name)
 
     # filter out self
