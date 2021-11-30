@@ -1,22 +1,27 @@
 """
 Implementation of raft node.
+Notes:
+    - rpc loop takes between 0.004 and 0.006 seconds to execute.
 """
-
+import json
 import logging
+import os
 import random
 import time
 import threading
 import traceback
+import argparse
 from xmlrpc.client import ServerProxy
 from xmlrpc.server import SimpleXMLRPCServer
 
 
 class Node:
-    def __init__(self, id, num_nodes, hostname):
-        self.logger = logging.getLogger(f'Node({id})')
-        logging.basicConfig(filename=f'raft({id}).log', level=logging.INFO)
+    def __init__(self, name, hostname, port, peers):
+        self.logger = logging.getLogger(f'Node({name})')
+        self.state_machine_file = f'./results/{name}.json'
+        logging.basicConfig(filename=f'logs/raft({name}).log', level=logging.INFO)
 
-        self.id = id
+        self.name = name
         self.leader_id = None
         self.state = "follower"
         self.currentTerm = 0
@@ -27,12 +32,13 @@ class Node:
         self.nextIndex = {}
         self.matchIndex = {}
         self.message_received = False
-        self.electionTimeout = random.randint(1500, 5000)
-        self.heartbeatTimeout = random.randint(150, 300)
+        self.electionTimeout = 0
+        self.update_election_timeout()
+        self.heartbeatTimeout = 500
 
         self.ip = hostname
 
-        self.nodes = [{'id': i, 'url': f'http://{hostname}:{8000 + i}'} for i in range(num_nodes) if i != id]
+        self.nodes = [{'name': peer['name'], 'url': f'http://{peer["hostname"]}:{peer["port"]}'} for peer in peers]
 
         # start main loop in a separate thread
         thread = threading.Thread(target=self.main_loop)
@@ -41,7 +47,7 @@ class Node:
 
         # todo: is this the best way to do this?
         # start RPC server
-        self.server = SimpleXMLRPCServer(("localhost", 8000 + id), allow_none=True)
+        self.server = SimpleXMLRPCServer((hostname, port), allow_none=True)
 
         # register two rpc functions
         self.server.register_function(self.request_vote_rpc, "request_vote_rpc")
@@ -50,6 +56,9 @@ class Node:
 
         # Run the server's main loop
         self.server.serve_forever()
+
+    def update_election_timeout(self):
+        self.electionTimeout = random.randint(1500, 5000)
 
     def main_loop(self):
         while True:
@@ -63,7 +72,7 @@ class Node:
                 raise ValueError("Invalid state")
 
     def follower_loop(self):
-        self.logger.info("[%s] Follower loop", self.id)
+        self.logger.info("[%s] Follower loop", self.name)
         while self.state == "follower":
             self.message_received = False
             time.sleep(self.electionTimeout / 1000)
@@ -72,11 +81,11 @@ class Node:
                 self.state = "candidate"
 
     def candidate_loop(self):
-        self.logger.info("[%s] Candidate loop", self.id)
+        self.logger.info("[%s] Candidate loop", self.name)
         self.currentTerm += 1
-        self.votedFor = self.id
+        self.votedFor = self.name
         self.state = "candidate"
-        self.electionTimeout = random.randint(1500, 5000)
+        self.update_election_timeout()
         votes = [True]
 
         # send RequestVote RPCs to all other servers
@@ -94,20 +103,20 @@ class Node:
         # if votes > majority, become leader
         if sum(votes) > (len(self.nodes) + 1) / 2:
             self.state = "leader"
-            self.nextIndex = {node['id']: len(self.log) for node in self.nodes}
-            self.matchIndex = {node['id']: 0 for node in self.nodes}
-            self.heartbeatTimeout = random.randint(150, 300)
-            self.logger.info("[%s] Became leader", self.id)
+            next_index = self.log[-1]['index'] + 1 if self.log else 0
+            self.nextIndex = {node['name']: next_index for node in self.nodes}
+            self.matchIndex = {node['name']: 0 for node in self.nodes}
+            self.logger.info("[%s] Became leader", self.name)
         else:
             self.state = "follower"
-            self.logger.info("[%s] Did not become leader", self.id)
+            self.logger.info("[%s] Did not become leader", self.name)
 
     def send_request_vote_rpc(self, node, votes):
         with ServerProxy(node['url']) as proxy:
             try:
                 last_log_term = self.log[-1]['term'] if self.log else 0
                 last_log_index = self.log[-1]['index'] if self.log else 0
-                response = proxy.request_vote_rpc(self.currentTerm, self.id, last_log_index, last_log_term)
+                response = proxy.request_vote_rpc(self.currentTerm, self.name, last_log_index, last_log_term)
 
                 # if response contains term T > currentTerm, convert to follower
                 if response[0] > self.currentTerm:
@@ -119,22 +128,21 @@ class Node:
                     return votes.append(True)
 
             except Exception as e:
-                self.logger.error("[%s] Error in request_vote_rpc: %s %s", self.id, e, traceback.format_exc())
+                self.logger.error("[%s] Error in request_vote_rpc: %s %s", self.name, e, traceback.format_exc())
 
         return votes.append(False)
 
     def leader_loop(self):
-        self.logger.info("[%s] Leader loop", self.id)
+        self.logger.info("[%s] Leader loop", self.name)
         while self.state == "leader":
             time.sleep(self.heartbeatTimeout / 1000)
-            self.heartbeatTimeout = random.randint(150, 300)
             self.send_heartbeats()
 
     def update_current_term_and_become_follower(self, term):
         self.votedFor = None
         self.currentTerm = term
         self.state = "follower"
-        self.logger.info("[%s] Updated current term to %d", self.id, self.currentTerm)
+        self.logger.info("[%s] Updated current term to %d", self.name, self.currentTerm)
 
     def send_heartbeats(self):
         # send AppendEntries RPCs to all other servers
@@ -146,7 +154,7 @@ class Node:
 
         # wait for all threads to finish
         for job in jobs:
-            job.join()
+            job.join(timeout=self.heartbeatTimeout / 1000 / 2)
 
     def send_append_entries_rpc(self, node):
         with ServerProxy(node['url']) as proxy:
@@ -154,10 +162,10 @@ class Node:
                 prev_log_index = self.log[-1]['index'] if self.log else 0
                 prev_log_term = self.log[-1]['term'] if self.log else 0
                 term = self.currentTerm
-                entries = self.log[self.nextIndex[node['id']]:] if self.nextIndex[node['id']] < len(self.log) else []
+                entries = self.log[self.nextIndex[node['name']]:] if self.nextIndex[node['name']] < len(self.log) else []
 
                 response = proxy.append_entries_rpc(term,
-                                                    self.id,
+                                                    self.name,
                                                     prev_log_index,
                                                     prev_log_term,
                                                     entries,
@@ -170,37 +178,41 @@ class Node:
 
                 # if response is successful, update nextIndex and matchIndex
                 if response[1]:
-                    self.nextIndex[node['id']] = self.log[-1]['index'] + 1 if self.log else 0
-                    self.matchIndex[node['id']] = self.log[-1]['index'] if self.log else 0
+                    self.nextIndex[node['name']] = self.log[-1]['index'] + 1 if self.log else 0
+                    self.matchIndex[node['name']] = self.log[-1]['index'] if self.log else 0
 
                 # if fails because of log inconsistency, decrement nextIndex and retry
                 else:
-                    self.nextIndex[node.id] -= 1
-                    return self.send_append_entries_rpc(node)
+                    self.nextIndex[node['name']] -= 1
+                    return
 
+                prev_commit_index = self.commitIndex
                 # if there exists an N such that N > commitIndex, a majority of matchIndex[i] ≥ N,
                 # and log[N].term == currentTerm set commitIndex = N
-                for N in range(self.commitIndex + 1, len(self.log)):
+                for N in range(self.commitIndex, len(self.log)):
                     majority = 1
                     for follower_node in self.nodes:
-                        if self.matchIndex[follower_node['id']] >= N:
+                        if self.matchIndex[follower_node['name']] >= N:
                             majority += 1
 
                     if majority > len(self.nodes) + 1 / 2:
                         self.commitIndex = N
-                        self.logger.info("[%s] Updated commitIndex to %d", self.id, self.commitIndex)
+                        self.logger.info("[%s] Updated commitIndex to %d", self.name, self.commitIndex)
+
+                # if commitIndex changed, apply log entries starting from commitIndex
+                if self.commitIndex > prev_commit_index:
+                    self.apply_log_entries(prev_commit_index, self.commitIndex)
 
             except Exception as e:
-                self.logger.error("[%s] communication with %s Exception: %s %s", self.id, node.id, e,
-                                  traceback.format_exc())
+                self.logger.error("[%s] communication with %s Exception: %s", self.name, node['name'], e)
 
-    def append_entries_rpc(self, term, leader_id, prev_log_index, prev_log_term, entries, leader_commit) -> (int, bool):
+    def append_entries_rpc(self, term, leader_id, prev_log_index, prev_log_term, entries, leader_commit) -> (str, bool):
         self.message_received = True
 
         try:
             # todo: is this correct see rules for servers
             # if AppendEntries RPC request received form new leader, convert to follower
-            if self.state == "candidate" and leader_id != self.id:
+            if self.state == "candidate" and leader_id != self.name:
                 self.state = "follower"
 
             self.leader_id = leader_id
@@ -225,16 +237,21 @@ class Node:
                 self.log += entries[len(self.log) - prev_log_index - 1:]
 
             # update commitIndex
+            prev_commit_index = self.commitIndex
             if leader_commit > self.commitIndex:
                 self.commitIndex = min(leader_commit, self.log[-1]['index'])
-                self.logger.info("[%s] Updated commitIndex to %d", self.id, self.commitIndex)
+                self.logger.info("[%s] Updated commitIndex to %d", self.name, self.commitIndex)
+
+            # if commitIndex changed, apply log entries starting from commitIndex
+            if self.commitIndex > prev_commit_index:
+                self.apply_log_entries(prev_commit_index, self.commitIndex)
 
         except Exception as e:
-            self.logger.error("[%s] Exception in append entries rpc: %s %s", self.id, e, traceback.format_exc())
+            self.logger.error("[%s] Exception in append entries rpc: %s", self.name, traceback.format_exc())
 
         return self.currentTerm, True
 
-    def request_vote_rpc(self, term, candidate_id, last_log_index, last_log_term) -> (int, bool):
+    def request_vote_rpc(self, term, candidate_id, last_log_index, last_log_term) -> (str, bool):
         self.message_received = True
 
         # reply false if term < currentTerm
@@ -250,7 +267,7 @@ class Node:
             return self.currentTerm, False
 
         # reply false if log is more up-to-date than the candidate's
-        if self.log and self.log[-1]['index'] > last_log_index and self.log[last_log_index].term > last_log_term:
+        if self.log and self.log[-1]['index'] > last_log_index and self.log[last_log_index]['term'] > last_log_term:
             return self.currentTerm, False
 
         # grant vote if candidate's log is at least as up-to-date as receiver's
@@ -268,7 +285,54 @@ class Node:
         else:
             # add ingestion time to the message
             message['ingestion_time'] = time.time()
-            self.log.append({'index': len(self.log), 'term': self.currentTerm, 'data': message})
+            next_index = self.log[-1]['index'] + 1 if self.log else 0
+            self.log.append({'index': next_index, 'term': self.currentTerm, 'data': message})
             # log message and commitIndex
-            self.logger.info("[%s] Stored message %s at index %d", self.id, message, self.commitIndex)
-            return self.id, True
+            self.logger.info("[%s] Stored message %s at index %d", self.name, message, self.commitIndex)
+            return self.name, True
+
+    def apply_log_entries(self, prev_commit_index, commitIndex):
+        # append the log entries to the state machine
+        file = open(self.state_machine_file, 'a')
+        for entry in self.log[prev_commit_index:commitIndex]:
+            # append commit time to the message
+            entry['data']['commit_time'] = time.time()
+            file.write(json.dumps(entry) + '\n')
+
+        file.close()
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--name', default=0, type=int, help='id of the server in the cluster, used for logging')
+    parser.add_argument('--local', default=True, action='store_true', help='Run locally')
+    parser.add_argument('--port', default=8000, type=int, help='Listening port')
+    parser.add_argument('--cluster', nargs='+', type=int, default=[], help='List of peers in the cluster')
+    args = parser.parse_args()
+
+    # make the log directory
+    os.makedirs('logs', exist_ok=True)
+
+    # id: node102
+    # hostname: node102.cm.cluster
+    # port: 7077
+    # peers: [node102, node103, node104, node105, node106]
+    # --id node102 --hostname node102.cm.cluster --port 7077 --cluster node102 node103 node104 node105 node106
+
+    peers = [
+        {
+            'name': peer,
+            'hostname': 'localhost' if args.local else f'{peer}.cm.cluster',
+            'port': args.port + id
+        }
+        for id, peer in enumerate(args.cluster)
+    ]
+
+    # own port and hostname
+    hostname = 'localhost' if args.local else f'{str(args.name)}.cm.cluster'
+    port = args.port + args.cluster.index(args.name)
+
+    # filter out self
+    peers = [peer for peer in peers if peer['name'] != args.name]
+
+    # create a node
+    node = Node(args.name, hostname, port, peers)
