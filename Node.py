@@ -10,7 +10,6 @@ import random
 import socket
 import time
 import threading
-import traceback
 import argparse
 from xmlrpc.client import ServerProxy
 from xmlrpc.server import SimpleXMLRPCServer
@@ -130,7 +129,7 @@ class Node:
                     return votes.append(True)
 
             except Exception as e:
-                self.logger.error("[%s] Error in request_vote_rpc: %s %s", self.name, e, traceback.format_exc())
+                self.logger.error("[%s] Error in request_vote_rpc to %s: %s", self.name, node['url'], e)
 
         return votes.append(False)
 
@@ -255,7 +254,7 @@ class Node:
                 self.apply_log_entries(prev_commit_index, self.commitIndex)
 
         except Exception as e:
-            self.logger.error("[%s] Exception in append entries rpc: %s", self.name, traceback.format_exc())
+            self.logger.error("[%s] Exception in append entries rpc: %s", self.name, e)
 
         return self.currentTerm, True
 
