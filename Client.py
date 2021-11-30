@@ -50,7 +50,7 @@ class Client:
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--port', default=8000, type=int, help='Listening port')
-    parser.add_argument('--local', default=True, action='store_true', help='Run locally')
+    parser.add_argument('--local', action='store_true', help='Run locally')
     parser.add_argument('--cluster', nargs='+', type=str, default=[], help='List of peers in the cluster')
     args = parser.parse_args()
 

@@ -1,0 +1,4 @@
+INFO:Node(3):[3] Follower loop
+INFO:Node(3):[3] Candidate loop
+INFO:Node(3):[3] Became leader
+INFO:Node(3):[3] Leader loop
