@@ -36,7 +36,7 @@ class Client:
             # random element of nodes
             self.leader_id = random.choice(list(self.nodes.keys()))
 
-        self.logger.info(f"Sending state {state}")
+        self.logger.info(f"Sending state {state} to {self.nodes[self.leader_id]}")
 
         with xmlrpc.client.ServerProxy(self.nodes[self.leader_id]) as proxy:
             response = proxy.store_message(state)
