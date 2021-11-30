@@ -14,7 +14,7 @@ class Client:
     def __init__(self, nodes):
         self.nodes = nodes
         self.leader_id = None
-        self.rate = 1/10
+        self.rate = 1/5
 
         # initialize logger
         self.logger = logging.getLogger("generator")
@@ -27,7 +27,7 @@ class Client:
 
     def generate(self):
         return {
-            "generation_time": time.time(),
+            # "generation_time": time.time(),
         }
 
     def send_state(self, state):

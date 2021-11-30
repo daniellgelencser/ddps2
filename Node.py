@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import random
+import socket
 import time
 import threading
 import traceback
@@ -35,6 +36,7 @@ class Node:
         self.electionTimeout = 0
         self.update_election_timeout()
         self.heartbeatTimeout = 500
+        socket.setdefaulttimeout(self.heartbeatTimeout / 1000 / 2)
 
         self.ip = hostname
 
@@ -152,6 +154,7 @@ class Node:
             thread = threading.Thread(target=self.send_append_entries_rpc, args=(node,))
             thread.start()
 
+
         # wait for all threads to finish
         for job in jobs:
             job.join(timeout=self.heartbeatTimeout / 1000 / 2)
@@ -179,7 +182,11 @@ class Node:
                 prev_log_index = self.log[-1]['index'] if self.log else 0
                 prev_log_term = self.log[-1]['term'] if self.log else 0
                 term = self.currentTerm
-                entries = self.log[self.nextIndex[node['name']]:] if self.nextIndex[node['name']] < len(self.log) else []
+
+                if self.nextIndex[node['name']] < len(self.log):
+                    entries = self.log[self.nextIndex[node['name']]:]
+                else:
+                    entries = []
 
                 response = proxy.append_entries_rpc(term,
                                                     self.name,
@@ -233,17 +240,18 @@ class Node:
                     break
 
             # append any new entries not already in the log
-            if entries:
-                self.log += entries[len(self.log) - prev_log_index - 1:]
+            for entry in entries:
+                if len(self.log) == 0 or entry['index'] > self.log[-1]['index']:
+                    self.log.append(entry)
 
             # update commitIndex
             prev_commit_index = self.commitIndex
             if leader_commit > self.commitIndex:
                 self.commitIndex = min(leader_commit, self.log[-1]['index'])
-                self.logger.info("[%s] Updated commitIndex to %d", self.name, self.commitIndex)
 
             # if commitIndex changed, apply log entries starting from commitIndex
             if self.commitIndex > prev_commit_index:
+                self.logger.info("[%s] Updated commitIndex to %d", self.name, self.commitIndex)
                 self.apply_log_entries(prev_commit_index, self.commitIndex)
 
         except Exception as e:
@@ -284,7 +292,7 @@ class Node:
         # if leader, append to log
         else:
             # add ingestion time to the message
-            message['ingestion_time'] = time.time()
+            # message['ingestion_time'] = time.time()
             next_index = self.log[-1]['index'] + 1 if self.log else 0
             self.log.append({'index': next_index, 'term': self.currentTerm, 'data': message})
             # log message and commitIndex
@@ -296,10 +304,11 @@ class Node:
         file = open(self.state_machine_file, 'a')
         for entry in self.log[prev_commit_index:commitIndex]:
             # append commit time to the message
-            entry['data']['commit_time'] = time.time()
+            # entry['data']['commit_time'] = time.time()
             file.write(json.dumps(entry) + '\n')
 
         file.close()
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
