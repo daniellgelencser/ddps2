@@ -14,7 +14,7 @@ class Client:
     def __init__(self, nodes):
         self.nodes = nodes
         self.leader_id = None
-        self.rate = 1
+        self.rate = 1/10
 
         # initialize logger
         self.logger = logging.getLogger("generator")

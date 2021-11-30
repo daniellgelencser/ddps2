@@ -58,7 +58,7 @@ class Node:
         self.server.serve_forever()
 
     def update_election_timeout(self):
-        self.electionTimeout = random.randint(1500, 5000)
+        self.electionTimeout = random.randint(1000, 1500)
 
     def main_loop(self):
         while True:
@@ -156,6 +156,23 @@ class Node:
         for job in jobs:
             job.join(timeout=self.heartbeatTimeout / 1000 / 2)
 
+        prev_commit_index = self.commitIndex
+        # if there exists an N such that N > commitIndex, a majority of matchIndex[i] ≥ N,
+        # and log[N].term == currentTerm set commitIndex = N
+        for N in range(self.commitIndex, len(self.log)):
+            majority = 1
+            for follower_node in self.nodes:
+                if self.matchIndex[follower_node['name']] >= N:
+                    majority += 1
+
+            if majority > (len(self.nodes) + 1) / 2:
+                self.commitIndex = N
+
+        # if commitIndex changed, apply log entries starting from commitIndex
+        if self.commitIndex > prev_commit_index:
+            self.logger.info("[%s] Updated commitIndex to %d", self.name, self.commitIndex)
+            self.apply_log_entries(prev_commit_index, self.commitIndex)
+
     def send_append_entries_rpc(self, node):
         with ServerProxy(node['url']) as proxy:
             try:
@@ -185,23 +202,6 @@ class Node:
                 else:
                     self.nextIndex[node['name']] -= 1
                     return
-
-                prev_commit_index = self.commitIndex
-                # if there exists an N such that N > commitIndex, a majority of matchIndex[i] ≥ N,
-                # and log[N].term == currentTerm set commitIndex = N
-                for N in range(self.commitIndex, len(self.log)):
-                    majority = 1
-                    for follower_node in self.nodes:
-                        if self.matchIndex[follower_node['name']] >= N:
-                            majority += 1
-
-                    if majority > len(self.nodes) + 1 / 2:
-                        self.commitIndex = N
-                        self.logger.info("[%s] Updated commitIndex to %d", self.name, self.commitIndex)
-
-                # if commitIndex changed, apply log entries starting from commitIndex
-                if self.commitIndex > prev_commit_index:
-                    self.apply_log_entries(prev_commit_index, self.commitIndex)
 
             except Exception as e:
                 self.logger.error("[%s] communication with %s Exception: %s", self.name, node['name'], e)
@@ -288,7 +288,7 @@ class Node:
             next_index = self.log[-1]['index'] + 1 if self.log else 0
             self.log.append({'index': next_index, 'term': self.currentTerm, 'data': message})
             # log message and commitIndex
-            self.logger.info("[%s] Stored message %s at index %d", self.name, message, self.commitIndex)
+            self.logger.info("[%s] Reserved message %s for index %d", self.name, message, next_index)
             return self.name, True
 
     def apply_log_entries(self, prev_commit_index, commitIndex):
