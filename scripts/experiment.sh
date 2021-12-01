@@ -14,7 +14,7 @@ read -r -a workers <<< "$worker_list"
 echo "reserved the following nodes: ${workers[*]}"
 
 # repeat the experiment 10 times
-for i in {1..2}
+for i in {1..10}
 do
 
   # for the 5 nodes in the cluster
