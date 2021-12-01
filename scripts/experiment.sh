@@ -4,7 +4,7 @@ CODE_PATH=/var/scratch/ddps2105/ddps2
 
 module load prun
 
-preserve -# 6 -t 00:01:00
+preserve -# 6 -t 04:00:00
 
 # wait a few seconds for the workers to be reserved
 sleep 5
