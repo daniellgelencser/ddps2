@@ -16,10 +16,12 @@ from xmlrpc.server import SimpleXMLRPCServer
 
 
 class Node:
-    def __init__(self, name, hostname, port, peers):
+    def __init__(self, run, name, hostname, port, peers):
         self.logger = logging.getLogger(f'Node({name})')
-        self.state_machine_file = f'./results/{name}.json'
-        logging.basicConfig(filename=f'logs/raft({name}).log', level=logging.INFO)
+        os.makedirs(f'results/{run}', exist_ok=True)
+        self.state_machine_file = f'./results/{run}/{name}.csv'
+        os.makedirs(f'logs/{run}', exist_ok=True)
+        logging.basicConfig(filename=f'logs/{run}/raft({name}).log', level=logging.INFO)
 
         self.name = name
         self.leader_id = None
@@ -153,7 +155,6 @@ class Node:
             thread = threading.Thread(target=self.send_append_entries_rpc, args=(node,))
             thread.start()
 
-
         # wait for all threads to finish
         for job in jobs:
             job.join(timeout=self.heartbeatTimeout / 1000 / 2)
@@ -201,8 +202,9 @@ class Node:
 
                 # if response is successful, update nextIndex and matchIndex
                 if response[1]:
-                    self.nextIndex[node['name']] = self.log[-1]['index'] + 1 if self.log else 0
-                    self.matchIndex[node['name']] = self.log[-1]['index'] if self.log else 0
+                    if entries:
+                        self.nextIndex[node['name']] = entries[-1]['index'] + 1 if self.log else 0
+                        self.matchIndex[node['name']] = entries[-1]['index'] if self.log else 0
 
                 # if fails because of log inconsistency, decrement nextIndex and retry
                 else:
@@ -291,7 +293,7 @@ class Node:
         # if leader, append to log
         else:
             # add ingestion time to the message
-            # message['ingestion_time'] = time.time()
+            message['ingestion_time'] = time.time()
             next_index = self.log[-1]['index'] + 1 if self.log else 0
             self.log.append({'index': next_index, 'term': self.currentTerm, 'data': message})
             # log message and commitIndex
@@ -299,12 +301,14 @@ class Node:
             return self.name, True
 
     def apply_log_entries(self, prev_commit_index, commitIndex):
-        # append the log entries to the state machine
+        # append the index, generation_time, ingestion_time and commit_time to a csv file
         file = open(self.state_machine_file, 'a')
         for entry in self.log[prev_commit_index:commitIndex]:
             # append commit time to the message
-            # entry['data']['commit_time'] = time.time()
-            file.write(json.dumps(entry) + '\n')
+            entry['data']['commit_time'] = time.time()
+            data = entry['data']
+            file.write(
+                f'{str(entry["index"])},{data["id"]},{data["rate"]},{data["generation_time"]},{data["ingestion_time"]},{data["commit_time"]}\n')
 
         file.close()
 
@@ -315,6 +319,7 @@ if __name__ == '__main__':
     parser.add_argument('--local', action='store_true', help='Run locally')
     parser.add_argument('--port', default=8000, type=int, help='Listening port')
     parser.add_argument('--cluster', nargs='+', type=str, default=[], help='List of peers in the cluster')
+    parser.add_argument('--run', type=int, default=0, help='Run id of the test')
     args = parser.parse_args()
 
     # make the log directory
@@ -343,4 +348,4 @@ if __name__ == '__main__':
     peers = [peer for peer in peers if peer['name'] != args.name]
 
     # create a node
-    node = Node(args.name, hostname, port, peers)
+    node = Node(args.run, args.name, hostname, port, peers)
