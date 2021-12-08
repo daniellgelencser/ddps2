@@ -308,7 +308,7 @@ class Node:
             entry['data']['commit_time'] = time.time()
             data = entry['data']
             file.write(
-                f'{str(entry["index"])},{data["id"]},{data["rate"]},{data["generation_time"]},{data["ingestion_time"]},{data["commit_time"]}\n')
+                f'{str(entry["index"])},{data["id"]},{data["rate"]},{self.state},{data["generation_time"]},{data["ingestion_time"]},{data["commit_time"]}\n')
 
         file.close()
 
