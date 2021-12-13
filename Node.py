@@ -159,6 +159,7 @@ class Node:
         for job in jobs:
             job.join(timeout=self.heartbeatTimeout / 1000 / 2)
 
+    def commit_entry(self):
         prev_commit_index = self.commitIndex
         # if there exists an N such that N > commitIndex, a majority of matchIndex[i] ≥ N,
         # and log[N].term == currentTerm set commitIndex = N
@@ -213,6 +214,8 @@ class Node:
 
             except Exception as e:
                 self.logger.error("[%s] communication with %s Exception: %s", self.name, node['name'], e)
+
+        self.commit_entry()
 
     def append_entries_rpc(self, term, leader_id, prev_log_index, prev_log_term, entries, leader_commit) -> (str, bool):
         self.message_received = True
