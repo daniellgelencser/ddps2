@@ -36,7 +36,7 @@ class Node:
         self.message_received = False
         self.electionTimeout = 0
         self.update_election_timeout()
-        self.heartbeatTimeout = 500
+        self.heartbeatTimeout = 250
         socket.setdefaulttimeout(self.heartbeatTimeout / 1000 / 2)
 
         self.ip = hostname
