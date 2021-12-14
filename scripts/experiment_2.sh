@@ -28,8 +28,8 @@ do
   sleep 10
 
   # start the client
-  echo "${workers[0]}" /var/scratch/ddps2105/Python-3.9.7/python $CODE_PATH/Client.py --run "$i" --messages 100000 --constant --rate 1000 --port 8000 --cluster "${workers[@]:1}"
-  echo "" | ssh "${workers[0]}" /var/scratch/ddps2105/Python-3.9.7/python $CODE_PATH/Client.py --run "$i" --messages 100000 --constant --rate 1000 --port 8000 --cluster "${workers[@]:1}"
+  echo "${workers[0]}" /var/scratch/ddps2105/Python-3.9.7/python $CODE_PATH/Client.py --run "$i" --messages 10000 --constant --rate 1000 --port 8000 --cluster "${workers[@]:1}"
+  echo "" | ssh "${workers[0]}" /var/scratch/ddps2105/Python-3.9.7/python $CODE_PATH/Client.py --run "$i" --messages 10000 --constant --rate 1000 --port 8000 --cluster "${workers[@]:1}"
 
   # wait for the client to finish and terminate the nodes
   echo "" | ssh "${workers[0]}" pkill -f Client.py
