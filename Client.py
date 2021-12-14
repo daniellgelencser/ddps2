@@ -29,7 +29,7 @@ class Client:
             self.send_state(state)
             time.sleep(1 / self.rate)
 
-            if i % 10 == 0 and not self.constant:
+            if not self.constant:
                 self.rate += 1
 
             if i % self.messages == 0:
