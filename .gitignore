@@ -1,6 +1,11 @@
 .idea
 aggregated
 experiment_1
-experiment_1.csv
+try_1/experiment_1.csv
 experiment_2
+try_1/experiment_2.csv
+try_2
+experiment_1.csv
 experiment_2.csv
+experiment_3.csv
+.DS_Store

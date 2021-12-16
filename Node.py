@@ -36,8 +36,8 @@ class Node:
         self.message_received = False
         self.electionTimeout = 0
         self.update_election_timeout()
-        self.heartbeatTimeout = 250
-        socket.setdefaulttimeout(self.heartbeatTimeout / 1000 / 2)
+        self.heartbeatTimeout = 50
+        socket.setdefaulttimeout(self.heartbeatTimeout / 1000)
 
         self.ip = hostname
 
@@ -61,7 +61,7 @@ class Node:
         self.server.serve_forever()
 
     def update_election_timeout(self):
-        self.electionTimeout = random.randint(1000, 1500)
+        self.electionTimeout = random.randint(100, 150)
 
     def main_loop(self):
         while True:
@@ -157,7 +157,7 @@ class Node:
 
         # wait for all threads to finish
         for job in jobs:
-            job.join(timeout=self.heartbeatTimeout / 1000 / 2)
+            job.join(timeout=self.heartbeatTimeout / 1000)
 
     def commit_entry(self):
         prev_commit_index = self.commitIndex
